@@ -11,9 +11,8 @@ void setDims(matrix& mat, const int numRow, const int numCol)
 
 void randMatrix(matrix& matrix, int numRow, int numCol, uint64_t modulus) 
 {
-    // Seed for the random number generator
-    random_device rd;
-    mt19937 gen(rd());
+    // Thread-local static random number generator for better performance
+    thread_local static mt19937 gen(random_device{}());
 
     // Define the distribution for random integers
     uniform_int_distribution<int> distribution(0, modulus - 1); // You can adjust the range as needed
@@ -32,9 +31,8 @@ void randMatrix(matrix& matrix, int numRow, int numCol, uint64_t modulus)
 
 void randMatrix(ringMatrix& matrix, int numRow, int numCol, int degree, uint64_t modulus) 
 {
-    // Seed for the random number generator
-    random_device rd;
-    mt19937 gen(rd());
+    // Thread-local static random number generator for better performance
+    thread_local static mt19937 gen(random_device{}());
 
     // Define the distribution for random integers
     uniform_int_distribution<uint64_t> distribution(0, modulus - 1); // Use uint64_t for distribution range
@@ -58,9 +56,8 @@ void randMatrix(ringMatrix& matrix, int numRow, int numCol, int degree, uint64_t
 
 void randVector(vector<int64_t>& vector, int length, uint64_t modulus)
 {
-    // Seed for the random number generator
-    random_device rd;
-    mt19937 gen(rd());
+    // Thread-local static random number generator for better performance
+    thread_local static mt19937 gen(random_device{}());
 
     // Define the distribution for random integers
     uniform_int_distribution<uint64_t> distribution(0, modulus - 1); // You can adjust the range as needed
@@ -124,18 +121,45 @@ void matrixMultiply(const matrix& matrix1, const matrix& matrix2, const uint64_t
     // Resize the result matrix
     resultMatrix.resize(numRows1, vector<int64_t>(numCols2));
 
-    // Perform matrix multiplication over Z_q using OpenMP
+    // Cache-friendly matrix multiplication with loop tiling
+    const int BLOCK_SIZE = 64; // Optimized for typical L1 cache size
+    
+    // Initialize result matrix to zero
     #pragma omp parallel for
     for (int i = 0; i < numRows1; ++i) 
     {
         for (int j = 0; j < numCols2; ++j) 
         {
-            int64_t sum = 0;
-            for (int k = 0; k < numCols1; ++k) 
+            resultMatrix[i][j] = 0;
+        }
+    }
+
+    // Blocked matrix multiplication for better cache locality
+    #pragma omp parallel for collapse(2)
+    for (int ii = 0; ii < numRows1; ii += BLOCK_SIZE) 
+    {
+        for (int jj = 0; jj < numCols2; jj += BLOCK_SIZE) 
+        {
+            for (int kk = 0; kk < numCols1; kk += BLOCK_SIZE) 
             {
-                sum = (sum + matrix1[i][k] * matrix2[k][j]) % modulus;
+                // Process block boundaries
+                int i_end = (ii + BLOCK_SIZE < numRows1) ? ii + BLOCK_SIZE : numRows1;
+                int j_end = (jj + BLOCK_SIZE < numCols2) ? jj + BLOCK_SIZE : numCols2;
+                int k_end = (kk + BLOCK_SIZE < numCols1) ? kk + BLOCK_SIZE : numCols1;
+                
+                // Inner loops process the block
+                for (int i = ii; i < i_end; ++i) 
+                {
+                    for (int k = kk; k < k_end; ++k) 
+                    {
+                        int64_t temp = matrix1[i][k];
+                        for (int j = jj; j < j_end; ++j) 
+                        {
+                            resultMatrix[i][j] = (resultMatrix[i][j] + temp * matrix2[k][j]) % modulus;
+                        }
+                    }
+                }
             }
-            resultMatrix[i][j] = sum;
         }
     }
 }
@@ -158,8 +182,8 @@ void matrixMultiply(const matrix& matrix_input, const std::vector<int64_t>& vect
     // Resize the result vector
     resultVector.resize(numRows, 0);
 
-    // Perform matrix-vector multiplication over Z_q using OpenMP with dynamic scheduling
-    #pragma omp parallel for schedule(dynamic)
+    // Perform matrix-vector multiplication over Z_q using OpenMP with static scheduling
+    #pragma omp parallel for schedule(static)
     for (int i = 0; i < numRows; ++i) 
     {
         int64_t sum = 0;
@@ -284,6 +308,7 @@ void ntt(poly& a, const uint64_t modulus, const int64_t root, bool invert)
     size_t n = a.size();
     assert((n & (n - 1)) == 0); // n must be a power of 2
 
+    // Bit-reversal permutation (unchanged - already optimal)
     for (size_t i = 1, j = 0; i < n; ++i) 
     {
         size_t bit = n >> 1;
@@ -296,19 +321,39 @@ void ntt(poly& a, const uint64_t modulus, const int64_t root, bool invert)
         }
     }
 
-    for (int len = 2; len <= n; len <<= 1) 
+    // Optimized NTT computation with reduced modular arithmetic
+    for (size_t len = 2; len <= n; len <<= 1) 
     {
         int64_t wlen = invert ? modExp(root, (modulus - 1 - (modulus - 1) / len), modulus) : modExp(root, (modulus - 1) / len, modulus);
-        for (int i = 0; i < n; i += len) 
-        {
-            int64_t w = 1;
-            for (int j = 0; j < len / 2; ++j) 
+        
+        // Process multiple blocks in parallel for large transforms
+        if (n >= 1024 && len >= 64) {
+            #pragma omp parallel for
+            for (size_t i = 0; i < n; i += len) 
             {
-                int64_t u = a[i + j];
-                int64_t v = (a[i + j + len / 2] * w) % modulus;
-                a[i + j] = (u + v) % modulus;
-                a[i + j + len / 2] = (u + modulus - v) % modulus;
-                w = (w * wlen) % modulus;
+                int64_t w = 1;
+                for (size_t j = 0; j < len / 2; ++j) 
+                {
+                    int64_t u = a[i + j];
+                    int64_t v = (static_cast<__int128>(a[i + j + len / 2]) * w) % modulus;
+                    a[i + j] = (u + v) % modulus;
+                    a[i + j + len / 2] = (u + modulus - v) % modulus;
+                    w = (static_cast<__int128>(w) * wlen) % modulus;
+                }
+            }
+        } else {
+            // Sequential processing for smaller blocks
+            for (size_t i = 0; i < n; i += len) 
+            {
+                int64_t w = 1;
+                for (size_t j = 0; j < len / 2; ++j) 
+                {
+                    int64_t u = a[i + j];
+                    int64_t v = (static_cast<__int128>(a[i + j + len / 2]) * w) % modulus;
+                    a[i + j] = (u + v) % modulus;
+                    a[i + j + len / 2] = (u + modulus - v) % modulus;
+                    w = (static_cast<__int128>(w) * wlen) % modulus;
+                }
             }
         }
     }
@@ -316,10 +361,18 @@ void ntt(poly& a, const uint64_t modulus, const int64_t root, bool invert)
     if (invert) 
     {
         int64_t n_inv = modExp(n, modulus - 2, modulus);
-        #pragma omp parallel for
-        for (int64_t &x : a) 
-        {
-            x = (x * n_inv) % modulus;
+        // Optimized final scaling with better parallelization threshold
+        if (n > 512) {
+            #pragma omp parallel for
+            for (size_t i = 0; i < n; ++i) 
+            {
+                a[i] = (static_cast<__int128>(a[i]) * n_inv) % modulus;
+            }
+        } else {
+            for (size_t i = 0; i < n; ++i) 
+            {
+                a[i] = (static_cast<__int128>(a[i]) * n_inv) % modulus;
+            }
         }
     }
 }
@@ -348,7 +401,7 @@ void multiply_ntt(const poly& src1, const poly &src2, poly& dest, const uint64_t
         fb = src2;
     } 
 
-    #pragma omp parallel for
+    // Remove unnecessary parallelization for small operations
     for (size_t i = 0; i < n; ++i) 
     {
         fa[i] = (fa[i] * fb[i]) % modulus;
@@ -356,7 +409,7 @@ void multiply_ntt(const poly& src1, const poly &src2, poly& dest, const uint64_t
 
     ntt(fa, modulus, root, true);
     dest.resize(n / 2);
-    #pragma omp parallel for
+    // Remove unnecessary parallelization for small operations
     for (size_t i = 0; i < n / 2; ++i) 
     {
         dest[i] = (fa[i] + modulus - (i + n / 2 < fa.size() ? fa[i + n / 2] : 0)) % modulus;
@@ -380,8 +433,8 @@ void invert_ntt(const poly& src, poly& dest, const uint64_t modulus, const int64
 
 int generateDiscreteGaussian(int mean, double stddev) 
 {
-    random_device rd;
-    mt19937 generator(rd());
+    // Thread-local static random number generator for better performance
+    thread_local static mt19937 generator(random_device{}());
     normal_distribution<> distribution(mean, stddev);
 
     return round(distribution(generator));

@@ -161,26 +161,27 @@ void query(const parameter& param, const int col, vector<poly>& qry, vector<poly
         }
     }
 
-    // Perform matrix-vector multiplication in parallel
+    // Perform matrix-vector multiplication in parallel without critical sections
     #pragma omp parallel for
     for (int i = 0; i < numInstance; ++i)
     {
+        // Use thread-local accumulator to avoid critical sections
+        poly local_qry(degree, 0);
+        
         for (int j = 0; j < rank; ++j)
         {
             poly tmp(2 * degree);
             multiply_ntt(tmp_ntt[i][j], sk_ntt[j], tmp, ctxt_modulus, root, true);
             for (int k = 0; k < degree; ++k)
             {
-                #pragma omp atomic update
-                qry[i][k] += tmp[k];
-                #pragma omp atomic update
-                qry[i][k] %= ctxt_modulus;
+                local_qry[k] = (local_qry[k] + tmp[k]) % ctxt_modulus;
             }
         }
 
+        // Add noise and store result (no race condition since each thread works on different i)
         for (int k = 0; k < degree; ++k)
         {
-            qry[i][k] = (qry[i][k] + generateDiscreteGaussian(0, 6.4)) % ctxt_modulus;
+            qry[i][k] = (local_qry[k] + generateDiscreteGaussian(0, 6.4)) % ctxt_modulus;
         }
     }
 
