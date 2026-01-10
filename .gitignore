@@ -33,7 +33,3 @@
 
 # Build Folder
 build/
-
-# CLAUDE Code
-.claude 
-CLAUDE.MD

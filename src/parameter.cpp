@@ -16,7 +16,7 @@ parameter::parameter()
     this -> lwe_crs = lwe_crs;
 }
 
-parameter::parameter(const database& db, const int degree, const int rank)
+parameter::parameter(const database& db, const int degree, const int rank, const uint64_t prime)
 {
     int numCol = db.getNumCol();
     int numRow = db.getNumRow();
@@ -27,7 +27,7 @@ parameter::parameter(const database& db, const int degree, const int rank)
     ctxt_modulus = 2013265921;
     root = 31;
 
-    ptxt_modulus = 991;
+    ptxt_modulus = prime;
     scale = ctxt_modulus / ptxt_modulus;
 
     numInstance = numRow / degree;

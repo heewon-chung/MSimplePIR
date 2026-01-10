@@ -1,0 +1,18 @@
+{
+  "output_file": "benchmark_crypto_param_results.csv",
+  "repetitions": 5,
+  "db_sizes": [
+    { "rows": 8192, "cols": 8192, "prime": 991 }
+  ],
+  "crypto_params": [
+    { "degree": 32, "rank": 32 },
+    { "degree": 64, "rank": 16 },
+    { "degree": 128, "rank": 8 },
+    { "degree": 256, "rank": 4 },
+    { "degree": 512, "rank": 2 },
+    { "degree": 1024, "rank": 1 }
+  ],
+  "threads": [8],
+  "memory_limit_gb": 16,
+  "warmup_runs": 2
+}

@@ -23,7 +23,7 @@ private:
 
 public:
     parameter();
-    parameter(const database& db, const int degree, const int rank);
+    parameter(const database& db, const int degree, const int rank, const uint64_t prime = 991);
 
     int getDegree() const {return degree;}
     int getRank() const {return rank;}
